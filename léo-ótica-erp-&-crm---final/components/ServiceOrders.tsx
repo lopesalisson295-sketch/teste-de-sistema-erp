@@ -76,16 +76,19 @@ export const ServiceOrders: React.FC = () => {
 
   const handleExportPDF = () => {
     if (selectedOrderIds.length === 0) {
-      alert("Selecione pelo menos uma ordem de serviço para exportar.");
+      alert("⚠️ Selecione pelo menos uma ordem de serviço para exportar.\n\nClique nas caixas de seleção ao lado de cada ordem que deseja incluir no relatório.");
       return;
     }
     
     // Trigger print which uses the hidden printable-report div
     const printContent = document.getElementById('printable-report');
     if (printContent) {
-        window.print();
+        alert(`✅ Preparando para exportar ${selectedOrderIds.length} ordem(ns) selecionada(s).\n\nNa janela de impressão:\n• Escolha "Salvar como PDF" ou "Microsoft Print to PDF"\n• Ou imprima diretamente`);
+        setTimeout(() => {
+          window.print();
+        }, 300);
     } else {
-        alert("Erro ao gerar relatório.");
+        alert("❌ Erro ao gerar relatório. Por favor, tente novamente.");
     }
   };
 
@@ -296,7 +299,7 @@ export const ServiceOrders: React.FC = () => {
                           <button 
                             type="button"
                             onClick={(e) => advanceStatus(order.id, order.status, e)}
-                            className="p-2 text-teal-600 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-lg transition-all cursor-pointer mr-2 z-10 bg-white shadow-sm border-slate-200" 
+                            className="p-2 text-teal-600 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-lg transition-all cursor-pointer mr-2 shadow-sm" 
                             title="Avançar Fase"
                           >
                             <Play size={16} fill="currentColor" />
@@ -306,7 +309,7 @@ export const ServiceOrders: React.FC = () => {
                         <button 
                           type="button"
                           onClick={(e) => handleEdit(order.id, e)}
-                          className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition-all cursor-pointer z-10 bg-white shadow-sm border border-slate-200" 
+                          className="p-2 text-slate-600 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition-all cursor-pointer bg-white shadow-sm border border-slate-200" 
                           title="Editar"
                         >
                           <Edit2 size={18} />
@@ -314,7 +317,7 @@ export const ServiceOrders: React.FC = () => {
                         <button 
                           type="button"
                           onClick={(e) => handleDelete(order.id, e)}
-                          className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-100 rounded-lg transition-all cursor-pointer z-10 bg-white shadow-sm border border-slate-200" 
+                          className="p-2 text-slate-600 hover:text-red-600 hover:bg-red-100 rounded-lg transition-all cursor-pointer bg-white shadow-sm border border-slate-200" 
                           title="Excluir"
                         >
                           <Trash2 size={18} />
