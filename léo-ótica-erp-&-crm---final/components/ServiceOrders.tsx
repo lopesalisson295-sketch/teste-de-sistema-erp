@@ -1,26 +1,187 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Filter, Calendar, CheckCircle2, AlertTriangle, Clock, ArrowRight, Download, ClipboardList, Trash2, Edit2, Play, CheckSquare, Square } from 'lucide-react';
-import { MOCK_ORDERS } from '../constants';
-import { OrderStatus, ServiceOrder } from '../types';
+import { Search, Calendar, CheckCircle2, AlertTriangle, Clock, ArrowRight, Download, Trash2, Edit2, CheckSquare, Square, X } from 'lucide-react';
+import { supabase } from '../lib/supabase';
+
+const ORDER_STATUSES = {
+  PENDING: 'Pendente',
+  LAB_SENT: 'Enviado Lab',
+  ASSEMBLY: 'Montagem',
+  QA: 'Controle Qualidade',
+  READY: 'Pronto',
+  DELIVERED: 'Entregue'
+};
+
+interface ServiceOrder {
+  id: number;
+  client_id: number | null;
+  client_name: string;
+  total_value: number;
+  status: string;
+  created_at: string;
+  delivery_date: string | null;
+  items: string[];
+}
 
 export const ServiceOrders: React.FC = () => {
-  // INITIALIZE FROM LOCAL STORAGE OR MOCK
-  const [orders, setOrders] = useState<ServiceOrder[]>(() => {
-    const saved = localStorage.getItem('erp_orders');
-    return saved ? JSON.parse(saved) : MOCK_ORDERS;
-  });
-
+  const [orders, setOrders] = useState<ServiceOrder[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState(true);
   const [selectedOrderIds, setSelectedOrderIds] = useState<number[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // SAVE TO LOCAL STORAGE
+  // Edit modal
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingOrder, setEditingOrder] = useState<ServiceOrder | null>(null);
+  const [formData, setFormData] = useState({
+    client_name: '',
+    total_value: '',
+    status: 'PENDING',
+    delivery_date: '',
+    items: ''
+  });
+
   useEffect(() => {
-    localStorage.setItem('erp_orders', JSON.stringify(orders));
-  }, [orders]);
+    loadOrders();
 
-  // Toggle Selection
+    const subscription = supabase
+      .channel('orders_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'service_orders' }, () => {
+        loadOrders();
+      })
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const loadOrders = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data, error } = await supabase
+        .from('service_orders')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setOrders(data || []);
+    } catch (error) {
+      console.error('Error loading orders:', error);
+      alert('Erro ao carregar ordens de serviço');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleOpenModal = (order?: ServiceOrder) => {
+    if (order) {
+      setEditingOrder(order);
+      setFormData({
+        client_name: order.client_name,
+        total_value: order.total_value.toString(),
+        status: order.status,
+        delivery_date: order.delivery_date || '',
+        items: Array.isArray(order.items) ? order.items.join(', ') : ''
+      });
+    }
+    setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setEditingOrder(null);
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleSaveOrder = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const orderData = {
+        client_name: formData.client_name,
+        total_value: parseFloat(formData.total_value) || 0,
+        status: formData.status,
+        delivery_date: formData.delivery_date || null,
+        items: formData.items.split(',').map(i => i.trim()).filter(i => i),
+        user_id: user.id
+      };
+
+      if (editingOrder) {
+        const { error } = await supabase
+          .from('service_orders')
+          .update(orderData)
+          .eq('id', editingOrder.id);
+
+        if (error) throw error;
+        alert('✅ Ordem atualizada com sucesso!');
+      }
+
+      handleCloseModal();
+      loadOrders();
+    } catch (error) {
+      console.error('Error saving order:', error);
+      alert('❌ Erro ao salvar ordem');
+    }
+  };
+
+  const advanceStatus = async (id: number, currentStatus: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    const statusFlow = ['PENDING', 'LAB_SENT', 'ASSEMBLY', 'QA', 'READY', 'DELIVERED'];
+    const currentIndex = statusFlow.indexOf(currentStatus);
+
+    if (currentIndex < statusFlow.length - 1) {
+      const nextStatus = statusFlow[currentIndex + 1];
+
+      try {
+        const { error } = await supabase
+          .from('service_orders')
+          .update({ status: nextStatus })
+          .eq('id', id);
+
+        if (error) throw error;
+        loadOrders();
+      } catch (error) {
+        console.error('Error updating status:', error);
+        alert('Erro ao avançar status');
+      }
+    }
+  };
+
+  const handleDelete = async (id: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    if (!window.confirm(`Tem certeza que deseja excluir a O.S. #${id}?`)) {
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from('service_orders')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+
+      setOrders(prev => prev.filter(o => o.id !== id));
+      setSelectedOrderIds(prev => prev.filter(oid => oid !== id));
+      alert('Ordem excluída.');
+    } catch (error) {
+      console.error('Error deleting order:', error);
+      alert('Erro ao excluir ordem');
+    }
+  };
+
   const toggleSelectOrder = (id: number) => {
     if (selectedOrderIds.includes(id)) {
       setSelectedOrderIds(selectedOrderIds.filter(oid => oid !== id));
@@ -29,348 +190,283 @@ export const ServiceOrders: React.FC = () => {
     }
   };
 
-  // Logic to advance status
-  const advanceStatus = (id: number, currentStatus: OrderStatus, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const statusFlow = [
-      OrderStatus.PENDING,
-      OrderStatus.LAB_SENT,
-      OrderStatus.ASSEMBLY,
-      OrderStatus.QA,
-      OrderStatus.READY,
-      OrderStatus.DELIVERED
-    ];
-
-    const currentIndex = statusFlow.indexOf(currentStatus);
-    if (currentIndex < statusFlow.length - 1) {
-      const nextStatus = statusFlow[currentIndex + 1];
-      setOrders(prev => prev.map(o => o.id === id ? { ...o, status: nextStatus } : o));
+  const handleExportPDF = () => {
+    if (selectedOrderIds.length === 0) {
+      alert("⚠️ Selecione pelo menos uma ordem para exportar.");
+      return;
     }
-  };
 
-  const handleDelete = (id: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (window.confirm(`Tem certeza que deseja excluir a O.S. #${id}?`)) {
-      setOrders(prev => prev.filter(o => o.id !== id));
-      // Remove from selected if deleted
-      setSelectedOrderIds(prev => prev.filter(oid => oid !== id));
-    }
-  };
-
-  const handleEdit = (id: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const order = orders.find(o => o.id === id);
-    const newName = prompt("Editar nome do cliente:", order?.clientName);
-    if (newName && order) {
-      setOrders(prev => prev.map(o => o.id === id ? { ...o, clientName: newName } : o));
-    }
+    alert(`✅ Preparando ${selectedOrderIds.length} ordem(ns).\n\nNa janela de impressão:\n• Salvar como PDF`);
+    setTimeout(() => window.print(), 300);
   };
 
   const filteredOrders = orders.filter(order => {
     const matchesStatus = filterStatus === 'ALL' || order.status === filterStatus;
-    const matchesSearch = 
-      order.clientName.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    const matchesSearch = order.client_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       order.id.toString().includes(searchTerm);
     return matchesStatus && matchesSearch;
   });
 
-  const handleExportPDF = () => {
-    if (selectedOrderIds.length === 0) {
-      alert("⚠️ Selecione pelo menos uma ordem de serviço para exportar.\n\nClique nas caixas de seleção ao lado de cada ordem que deseja incluir no relatório.");
-      return;
-    }
-    
-    // Trigger print which uses the hidden printable-report div
-    const printContent = document.getElementById('printable-report');
-    if (printContent) {
-        alert(`✅ Preparando para exportar ${selectedOrderIds.length} ordem(ns) selecionada(s).\n\nNa janela de impressão:\n• Escolha "Salvar como PDF" ou "Microsoft Print to PDF"\n• Ou imprima diretamente`);
-        setTimeout(() => {
-          window.print();
-        }, 300);
-    } else {
-        alert("❌ Erro ao gerar relatório. Por favor, tente novamente.");
-    }
+  const getStatusColor = (status: string) => {
+    const colors: any = {
+      PENDING: 'bg-gray-100 text-gray-700',
+      LAB_SENT: 'bg-blue-100 text-blue-700',
+      ASSEMBLY: 'bg-yellow-100 text-yellow-700',
+      QA: 'bg-purple-100 text-purple-700',
+      READY: 'bg-green-100 text-green-700',
+      DELIVERED: 'bg-teal-100 text-teal-700'
+    };
+    return colors[status] || 'bg-gray-100 text-gray-700';
   };
 
-  const handleReports = () => {
-     alert("Relatório Geral de Produção sendo baixado (CSV)...");
-  };
-
-  const getStatusColor = (status: OrderStatus) => {
-    switch (status) {
-      case OrderStatus.READY: return 'bg-green-100 text-green-800 border-green-200';
-      case OrderStatus.DELIVERED: return 'bg-slate-100 text-slate-800 border-slate-200';
-      case OrderStatus.LAB_SENT: return 'bg-purple-100 text-purple-800 border-purple-200';
-      case OrderStatus.ASSEMBLY: return 'bg-blue-100 text-blue-800 border-blue-200';
-      case OrderStatus.QA: return 'bg-orange-100 text-orange-800 border-orange-200';
-      default: return 'bg-yellow-100 text-yellow-800 border-yellow-200';
-    }
-  };
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-teal-600 mb-4"></div>
+          <p className="text-slate-600">Carregando ordens...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 print:hidden">
+      <div className="flex justify-between items-center">
         <div>
           <h2 className="text-2xl font-bold text-slate-800">Ordens de Serviço</h2>
-          <p className="text-slate-500">Gerencie o fluxo de produção e entregas</p>
+          <p className="text-slate-500">Gestão completa de O.S.</p>
         </div>
-        <div className="flex gap-2">
-           <button 
-             onClick={handleExportPDF}
-             className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-white border border-slate-800 rounded-lg text-sm font-medium hover:bg-slate-700 cursor-pointer"
-            >
-             <Download size={16} />
-             Exportar Selecionados (PDF)
-           </button>
-           <button 
-             onClick={handleReports}
-             className="flex items-center gap-2 px-4 py-2 bg-teal-600 rounded-lg text-sm font-medium text-white hover:bg-teal-700 shadow-sm cursor-pointer"
-            >
-             <Filter size={16} />
-             Relatórios
-           </button>
-        </div>
+        <button
+          onClick={handleExportPDF}
+          className="flex items-center gap-2 px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 cursor-pointer"
+        >
+          <Download size={16} />
+          Exportar Selecionadas
+        </button>
       </div>
 
-      {/* Control Bar */}
-      <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200 print:hidden">
-        <div className="flex flex-col md:flex-row gap-4 justify-between">
-          
-          {/* Search */}
-          <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
-            <input 
-              type="text" 
-              placeholder="Buscar por cliente ou nº O.S..." 
+      {/* Filters */}
+      <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-3 text-slate-400" size={20} />
+            <input
+              type="text"
+              placeholder="Buscar por cliente ou #ID..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none text-sm text-slate-800 shadow-sm"
+              className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none"
             />
           </div>
 
-          {/* Quick Filters */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-2 md:pb-0">
-            <button 
-              onClick={() => setFilterStatus('ALL')}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors cursor-pointer ${filterStatus === 'ALL' ? 'bg-slate-800 text-white' : 'bg-blue-50 text-slate-600 hover:bg-blue-100'}`}
-            >
-              Todos
-            </button>
-            <button 
-               onClick={() => setFilterStatus(OrderStatus.PENDING)}
-               className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors cursor-pointer ${filterStatus === OrderStatus.PENDING ? 'bg-yellow-500 text-white' : 'bg-yellow-50 text-yellow-700 hover:bg-yellow-100'}`}
-            >
-              Aguardando
-            </button>
-            <button 
-               onClick={() => setFilterStatus(OrderStatus.LAB_SENT)}
-               className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors cursor-pointer ${filterStatus === OrderStatus.LAB_SENT ? 'bg-purple-500 text-white' : 'bg-purple-50 text-purple-700 hover:bg-purple-100'}`}
-            >
-              Laboratório
-            </button>
-            <button 
-               onClick={() => setFilterStatus(OrderStatus.READY)}
-               className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors cursor-pointer ${filterStatus === OrderStatus.READY ? 'bg-green-500 text-white' : 'bg-green-50 text-green-700 hover:bg-green-100'}`}
-            >
-              Prontos
-            </button>
-            
-            <button 
-              onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
-              className={`ml-2 p-2 rounded-lg border cursor-pointer ${showAdvancedFilters ? 'bg-teal-50 border-teal-500 text-teal-700' : 'border-slate-300 text-slate-500 hover:bg-blue-50'}`}
-            >
-              <Filter size={16} />
-            </button>
-          </div>
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 cursor-pointer"
+          >
+            <option value="ALL">Todos os Status</option>
+            <option value="PENDING">Pendente</option>
+            <option value="LAB_SENT">Enviado Lab</option>
+            <option value="ASSEMBLY">Montagem</option>
+            <option value="QA">Controle Qualidade</option>
+            <option value="READY">Pronto</option>
+            <option value="DELIVERED">Entregue</option>
+          </select>
         </div>
-
-        {/* Advanced Filters Drawer */}
-        {showAdvancedFilters && (
-          <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 md:grid-cols-4 gap-4 animate-in fade-in slide-in-from-top-2">
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1">Data Inicial</label>
-              <div className="relative">
-                <Calendar className="absolute left-2.5 top-2.5 text-slate-800 z-10" size={14} />
-                <input 
-                  type="date" 
-                  className="w-full pl-8 pr-2 py-2 text-sm border border-slate-300 rounded focus:border-teal-500 outline-none bg-white text-slate-800 shadow-sm" 
-                  style={{ colorScheme: 'light' }}
-                />
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1">Data Final</label>
-              <div className="relative">
-                <Calendar className="absolute left-2.5 top-2.5 text-slate-800 z-10" size={14} />
-                <input 
-                  type="date" 
-                  className="w-full pl-8 pr-2 py-2 text-sm border border-slate-300 rounded focus:border-teal-500 outline-none bg-white text-slate-800 shadow-sm" 
-                  style={{ colorScheme: 'light' }}
-                />
-              </div>
-            </div>
-             <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1">Tipo de Serviço</label>
-              <select className="w-full px-2 py-2 text-sm border border-slate-300 rounded focus:border-teal-500 outline-none bg-white text-slate-800 shadow-sm cursor-pointer">
-                <option>Todos</option>
-                <option>Óculos Completo</option>
-                <option>Apenas Lentes</option>
-                <option>Conserto</option>
-              </select>
-            </div>
-             <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1">Laboratório</label>
-              <select className="w-full px-2 py-2 text-sm border border-slate-300 rounded focus:border-teal-500 outline-none bg-white text-slate-800 shadow-sm cursor-pointer">
-                <option>Todos</option>
-                <option>Hoya</option>
-                <option>Essilor</option>
-                <option>Zeiss</option>
-                <option>Montagem Própria</option>
-              </select>
-            </div>
-          </div>
-        )}
       </div>
 
-      {/* Orders List */}
-      <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden print:hidden">
-        <table className="w-full text-left border-collapse">
-          <thead className="bg-blue-50 text-slate-500 text-xs uppercase font-semibold">
+      {/* Orders Table */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <table className="w-full">
+          <thead className="bg-blue-50 text-slate-600 text-xs uppercase font-semibold">
             <tr>
-              <th className="px-4 py-4 w-10">
-                 {/* Header Checkbox could select all, but keeping simple for now */}
-              </th>
-              <th className="px-6 py-4">O.S. / Data</th>
-              <th className="px-6 py-4">Cliente / Itens</th>
-              <th className="px-6 py-4">Status Atual</th>
-              <th className="px-6 py-4">Previsão</th>
-              <th className="px-6 py-4 text-right">Valor Total</th>
+              <th className="px-4 py-4 text-center">Sel</th>
+              <th className="px-6 py-4 text-left">#ID</th>
+              <th className="px-6 py-4 text-left">Cliente</th>
+              <th className="px-6 py-4 text-left">Status</th>
+              <th className="px-6 py-4 text-right">Valor</th>
+              <th className="px-6 py-4 text-left">Entrega</th>
               <th className="px-6 py-4 text-center">Ações</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {filteredOrders.length > 0 ? (
-              filteredOrders.map((order) => {
-                const isSelected = selectedOrderIds.includes(order.id);
-                return (
-                  <tr key={order.id} className={`hover:bg-blue-50 transition-colors group ${isSelected ? 'bg-blue-50/50' : ''}`}>
-                    <td className="px-4 py-4 align-top">
-                        <button onClick={() => toggleSelectOrder(order.id)} className="text-slate-400 hover:text-teal-600 cursor-pointer">
-                            {isSelected ? <CheckSquare size={20} className="text-teal-600" /> : <Square size={20} />}
-                        </button>
-                    </td>
-                    <td className="px-6 py-4 align-top">
-                      <div className="flex flex-col">
-                        <span className="font-bold text-slate-900 text-lg">#{order.id}</span>
-                        <span className="text-xs text-slate-500 flex items-center gap-1 mt-1">
-                          <Calendar size={12} />
-                          {order.createdAt}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 align-top">
-                      <div className="font-semibold text-slate-800">{order.clientName}</div>
-                      <div className="text-sm text-slate-500 mt-1">
-                        {order.items?.join(', ')}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 align-top">
-                      <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold border ${getStatusColor(order.status)}`}>
-                        {order.status === OrderStatus.READY && <CheckCircle2 size={12} className="mr-1.5"/>}
-                        {order.status === OrderStatus.LAB_SENT && <Clock size={12} className="mr-1.5"/>}
-                        {order.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 align-top">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-slate-700">{order.deliveryDate}</span>
-                        {/* Simple logic for urgency indicator */}
-                        {order.status !== OrderStatus.DELIVERED && order.status !== OrderStatus.READY && (
-                          <span className="text-xs text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded border border-orange-100">2 dias</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 align-top text-right">
-                      <div className="font-bold text-slate-900">R$ {order.totalValue.toFixed(2)}</div>
-                    </td>
-                    <td className="px-6 py-4 align-top text-center">
-                      <div className="flex items-center justify-center gap-1">
-                        {order.status !== OrderStatus.DELIVERED && (
-                          <button 
-                            type="button"
-                            onClick={(e) => advanceStatus(order.id, order.status, e)}
-                            className="p-2 text-teal-600 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-lg transition-all cursor-pointer mr-2 shadow-sm" 
-                            title="Avançar Fase"
-                          >
-                            <Play size={16} fill="currentColor" />
-                          </button>
-                        )}
-                        
-                        <button 
-                          type="button"
-                          onClick={(e) => handleEdit(order.id, e)}
-                          className="p-2 text-slate-600 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition-all cursor-pointer bg-white shadow-sm border border-slate-200" 
-                          title="Editar"
-                        >
-                          <Edit2 size={18} />
-                        </button>
-                        <button 
-                          type="button"
-                          onClick={(e) => handleDelete(order.id, e)}
-                          className="p-2 text-slate-600 hover:text-red-600 hover:bg-red-100 rounded-lg transition-all cursor-pointer bg-white shadow-sm border border-slate-200" 
-                          title="Excluir"
-                        >
-                          <Trash2 size={18} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
-            ) : (
+            {filteredOrders.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-6 py-12 text-center text-slate-400">
-                  <div className="flex flex-col items-center justify-center">
-                    <ClipboardList size={48} className="mb-4 text-slate-200" />
-                    <p className="text-lg font-medium">Nenhuma ordem de serviço encontrada</p>
-                    <p className="text-sm">Tente ajustar seus filtros de busca.</p>
-                  </div>
+                <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
+                  <p className="text-lg font-medium">Nenhuma ordem encontrada</p>
                 </td>
               </tr>
+            ) : (
+              filteredOrders.map((order) => (
+                <tr key={order.id} className="hover:bg-slate-50">
+                  <td className="px-4 py-4 text-center">
+                    <input
+                      type="checkbox"
+                      checked={selectedOrderIds.includes(order.id)}
+                      onChange={() => toggleSelectOrder(order.id)}
+                      className="w-4 h-4 cursor-pointer"
+                    />
+                  </td>
+                  <td className="px-6 py-4 font-semibold text-slate-800">#{order.id}</td>
+                  <td className="px-6 py-4 text-slate-700">{order.client_name}</td>
+                  <td className="px-6 py-4">
+                    <span className={`inline-flex px-3 py-1 rounded-full text-xs font-semibold ${getStatusColor(order.status)}`}>
+                      {ORDER_STATUSES[order.status as keyof typeof ORDER_STATUSES] || order.status}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-right font-semibold text-green-600">
+                    R$ {order.total_value.toFixed(2)}
+                  </td>
+                  <td className="px-6 py-4 text-sm text-slate-600">
+                    {order.delivery_date || '-'}
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="flex items-center justify-center gap-2">
+                      {order.status !== 'DELIVERED' && (
+                        <button
+                          type="button"
+                          onClick={(e) => advanceStatus(order.id, order.status, e)}
+                          className="p-2 text-slate-600 hover:text-green-600 hover:bg-green-100 rounded-lg cursor-pointer"
+                          title="Avançar Status"
+                        >
+                          <ArrowRight size={18} />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleOpenModal(order)}
+                        className="p-2 text-slate-600 hover:text-blue-600 hover:bg-blue-100 rounded-lg cursor-pointer"
+                        title="Editar"
+                      >
+                        <Edit2 size={18} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => handleDelete(order.id, e)}
+                        className="p-2 text-slate-600 hover:text-red-600 hover:bg-red-100 rounded-lg cursor-pointer"
+                        title="Excluir"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
             )}
           </tbody>
         </table>
       </div>
 
-      {/* Hidden Print Section for PDF Export */}
-      <div id="printable-report" className="hidden print:block p-8 bg-white text-black font-sans">
-        <h1 className="text-2xl font-bold mb-2">Relatório de Ordens de Serviço</h1>
-        <p className="text-sm mb-6">Data de Emissão: {new Date().toLocaleDateString()}</p>
-        
-        <table className="w-full text-left border-collapse border border-black text-sm">
-            <thead>
-                <tr className="bg-gray-100">
-                    <th className="border border-black p-2">ID</th>
-                    <th className="border border-black p-2">Cliente</th>
-                    <th className="border border-black p-2">Status</th>
-                    <th className="border border-black p-2">Previsão</th>
-                    <th className="border border-black p-2 text-right">Valor</th>
-                </tr>
-            </thead>
-            <tbody>
-                {orders.filter(o => selectedOrderIds.includes(o.id)).map(order => (
-                    <tr key={order.id}>
-                        <td className="border border-black p-2">{order.id}</td>
-                        <td className="border border-black p-2">{order.clientName}</td>
-                        <td className="border border-black p-2">{order.status}</td>
-                        <td className="border border-black p-2">{order.deliveryDate}</td>
-                        <td className="border border-black p-2 text-right">R$ {order.totalValue.toFixed(2)}</td>
-                    </tr>
-                ))}
-            </tbody>
-        </table>
-      </div>
+      {/* Edit Modal */}
+      {isModalOpen && editingOrder && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full">
+            <div className="border-b border-slate-200 px-6 py-4 flex justify-between items-center">
+              <h3 className="text-xl font-bold text-slate-800">Editar Ordem #{editingOrder.id}</h3>
+              <button onClick={handleCloseModal} className="p-2 hover:bg-slate-100 rounded-lg">
+                <X size={24} />
+              </button>
+            </div>
 
+            <form onSubmit={handleSaveOrder} className="p-6 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Cliente *</label>
+                  <input
+                    type="text"
+                    name="client_name"
+                    value={formData.client_name}
+                    onChange={handleInputChange}
+                    required
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Valor Total (R$) *</label>
+                  <input
+                    type="number"
+                    name="total_value"
+                    value={formData.total_value}
+                    onChange={handleInputChange}
+                    required
+                    step="0.01"
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Status *</label>
+                  <select
+                    name="status"
+                    value={formData.status}
+                    onChange={handleInputChange}
+                    required
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 cursor-pointer"
+                  >
+                    <option value="PENDING">Pendente</option>
+                    <option value="LAB_SENT">Enviado Lab</option>
+                    <option value="ASSEMBLY">Montagem</option>
+                    <option value="QA">Controle Qualidade</option>
+                    <option value="READY">Pronto</option>
+                    <option value="DELIVERED">Entregue</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Data de Entrega</label>
+                  <input
+                    type="date"
+                    name="delivery_date"
+                    value={formData.delivery_date}
+                    onChange={handleInputChange}
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Itens (separados por vírgula)</label>
+                  <textarea
+                    name="items"
+                    value={formData.items}
+                    onChange={handleInputChange}
+                    rows={3}
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none"
+                    placeholder="Ex: Armação Ray-Ban, Lente Varilux"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button
+                  type="button"
+                  onClick={handleCloseModal}
+                  className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg cursor-pointer"
+                >
+                  Salvar Alterações
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden printable report */}
+      <div id="printable-report" className="hidden print:block">
+        <h1>Relatório de Ordens de Serviço</h1>
+        {orders.filter(o => selectedOrderIds.includes(o.id)).map(order => (
+          <div key={order.id}>
+            <p>O.S. #{order.id} - {order.client_name} - R$ {order.total_value}</p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 };

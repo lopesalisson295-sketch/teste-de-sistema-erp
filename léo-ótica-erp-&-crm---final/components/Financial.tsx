@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   AreaChart, Area
 } from 'recharts';
 import { DollarSign, TrendingUp, TrendingDown, Calendar, ArrowUpRight, ArrowDownRight, Filter, Download, ExternalLink, SlidersHorizontal } from 'lucide-react';
-import { MOCK_FINANCIAL_MONTHLY, MOCK_FINANCIAL_DAILY, MOCK_TRANSACTIONS } from '../constants';
+import { MOCK_FINANCIAL_MONTHLY, MOCK_FINANCIAL_DAILY } from '../constants';
 import { TransactionType } from '../types';
+import { supabase } from '../lib/supabase';
 
 const MONTHS = [
   'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
@@ -17,6 +18,29 @@ export const Financial: React.FC = () => {
   const [selectedMonth, setSelectedMonth] = useState(2); // March by default (index 2)
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [showAllTransactions, setShowAllTransactions] = useState(false);
+  const [transactions, setTransactions] = useState<any[]>([]);
+
+  // Load transactions from Supabase
+  useEffect(() => {
+    const loadTransactions = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        const { data, error } = await supabase
+          .from('transactions')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('date', { ascending: false });
+
+        if (error) throw error;
+        setTransactions(data || []);
+      } catch (error) {
+        console.error('Error loading transactions:', error);
+      }
+    };
+    loadTransactions();
+  }, []);
 
   // Filters State
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);

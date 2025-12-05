@@ -10,6 +10,7 @@ export const NAV_ITEMS = [
   { id: 'crm', label: 'Clientes (CRM)', icon: <Users size={20} /> },
   { id: 'orders', label: 'Ordens de Serviço', icon: <ClipboardList size={20} /> },
   { id: 'inventory', label: 'Estoque', icon: <Package size={20} /> },
+  { id: 'employees', label: 'Funcionários', icon: <Users size={20} /> },
 ];
 
 // Mock data removed - system ready for production use

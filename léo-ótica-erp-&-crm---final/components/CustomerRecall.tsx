@@ -1,317 +1,240 @@
 import React, { useState, useEffect } from 'react';
-import { MessageCircle, Clock, CheckCircle, Plus, X, User, MapPin, Phone, Settings, Send, Edit2, Trash2 } from 'lucide-react';
-import { MOCK_CLIENTS } from '../constants';
-import { Client } from '../types';
+import { Users, Plus, Star, X, MessageCircle, Search, Edit2, Trash2 } from 'lucide-react';
+import { supabase } from '../lib/supabase';
+
+interface Client {
+  id: number;
+  name: string;
+  phone: string;
+  address: string | null;
+  last_visit: string | null;
+  nps_score: number | null;
+}
 
 export const CustomerRecall: React.FC = () => {
-  // INITIALIZE FROM LOCAL STORAGE OR MOCK
-  const [clients, setClients] = useState<Client[]>(() => {
-    const saved = localStorage.getItem('erp_clients');
-    return saved ? JSON.parse(saved) : MOCK_CLIENTS;
-  });
+  const [clients, setClients] = useState<Client[]>([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Registration Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [newClient, setNewClient] = useState({
-    name: '',
-    phone: '',
-    address: ''
-  });
-
-  // Config Modal State
-  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
-  // Bulk Send Modal State
-  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
-
-  // Filter clients for recall demo
-  const recallList = clients.filter(c => c.id !== 2);
-
-  // SAVE TO LOCAL STORAGE
   useEffect(() => {
-    localStorage.setItem('erp_clients', JSON.stringify(clients));
-  }, [clients]);
+    loadClients();
 
-  const handleOpenModal = () => setIsModalOpen(true);
-  const handleCloseModal = () => setIsModalOpen(false);
+    const subscription = supabase
+      .channel('clients_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'clients' }, () => {
+        loadClients();
+      })
+      .subscribe();
 
-  const handleRegisterSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newClient.name || !newClient.phone) {
-      alert("Nome e Telefone são obrigatórios.");
-      return;
-    }
-
-    const client: Client = {
-      id: Math.floor(Math.random() * 10000),
-      name: newClient.name,
-      phone: newClient.phone,
-      address: newClient.address,
-      lastVisit: new Date().toISOString().split('T')[0],
-      npsScore: undefined
+    return () => {
+      subscription.unsubscribe();
     };
+  }, []);
 
-    setClients(prev => [client, ...prev]);
-    alert(`✅ Cliente ${client.name} cadastrado com sucesso!`);
-    setNewClient({ name: '', phone: '', address: '' });
-    setIsModalOpen(false);
+  const loadClients = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data, error } = await supabase
+        .from('clients')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setClients(data || []);
+    } catch (error) {
+      console.error('Error loading clients:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleAddClient = async () => {
+    const name = prompt('Nome do cliente:');
+    if (!name) return;
+
+    const phone = prompt('Telefone:');
+    if (!phone) return;
+
+    const address = prompt('Endereço (opcional):');
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { error } = await supabase
+        .from('clients')
+        .insert([{
+          name,
+          phone,
+          address,
+          user_id: user.id
+        }]);
+
+      if (error) throw error;
+
+      alert('✅ Cliente cadastrado!');
+      loadClients();
+    } catch (error) {
+      console.error('Error adding client:', error);
+      alert('❌ Erro ao cadastrar cliente');
+    }
+  };
+
+  const handleEditClient = async (client: Client) => {
+    const newPhone = prompt('Editar Telefone:', client.phone);
+    if (newPhone === null) return;
+
+    const newAddress = prompt('Editar Endereço:', client.address || '');
+
+    try {
+      const { error } = await supabase
+        .from('clients')
+        .update({
+          phone: newPhone,
+          address: newAddress || null
+        })
+        .eq('id', client.id);
+
+      if (error) throw error;
+
+      loadClients();
+    } catch (error) {
+      console.error('Error updating client:', error);
+      alert('Erro ao atualizar cliente');
+    }
+  };
+
+  const handleDeleteClient = async (id: number, name: string) => {
+    if (!window.confirm(`Excluir "${name}"?`)) return;
+
+    try {
+      const { error } = await supabase
+        .from('clients')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+
+      setClients(prev => prev.filter(c => c.id !== id));
+    } catch (error) {
+      console.error('Error deleting client:', error);
+      alert('Erro ao excluir cliente');
+    }
   };
 
   const handleWhatsApp = (phone: string, name: string) => {
-    const formattedPhone = phone.replace(/\D/g, '');
-    const message = `Olá ${name}, somos da Léo Ótica! Percebemos que faz um tempo desde sua última visita. Vamos agendar um check-up?`;
-    const url = `https://wa.me/55${formattedPhone}?text=${encodeURIComponent(message)}`;
-    window.open(url, '_blank');
+    const message = `Olá ${name}! Tudo bem? Aqui é da Léo Ótica.`;
+    const cleanPhone = phone.replace(/\D/g, '');
+    window.open(`https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`, '_blank');
   };
 
-  const handleEditClient = (clientId: number) => {
-    const client = clients.find(c => c.id === clientId);
-    if (!client) return;
+  const filteredClients = clients.filter(client =>
+    client.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    client.phone.includes(searchTerm)
+  );
 
-    const newPhone = prompt("Editar Telefone:", client.phone);
-    if (newPhone !== null && newPhone.trim()) {
-      const newAddress = prompt("Editar Endereço:", client.address || "");
-      setClients(prev => prev.map(c =>
-        c.id === clientId
-          ? { ...c, phone: newPhone.trim(), address: newAddress !== null ? newAddress.trim() : c.address }
-          : c
-      ));
-    }
-  };
-
-  const handleDeleteClient = (clientId: number, clientName: string) => {
-    if (window.confirm(`Tem certeza que deseja excluir o cliente "${clientName}"?\n\nEsta ação não pode ser desfeita.`)) {
-      setClients(prev => prev.filter(c => c.id !== clientId));
-    }
-  };
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-teal-600 mb-4"></div>
+          <p className="text-slate-600">Carregando clientes...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6 relative">
+    <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800">CRM & Recall Inteligente</h2>
-          <p className="text-slate-500">Gerencie sua base de clientes</p>
+          <h2 className="text-2xl font-bold text-slate-800">Clientes (CRM)</h2>
+          <p className="text-slate-500">Gestão de relacionamento com clientes</p>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={handleOpenModal}
-            className="flex items-center gap-2 px-4 py-2 bg-teal-600 rounded-md text-white text-sm font-medium hover:bg-teal-700 cursor-pointer shadow-sm transition-colors"
-          >
-            <Plus size={16} />
-            Novo Cliente
-          </button>
-          <button
-            onClick={() => setIsConfigModalOpen(true)}
-            className="px-4 py-2 bg-white border border-slate-300 rounded-md text-slate-700 text-sm font-medium hover:bg-blue-50 cursor-pointer transition-colors"
-          >
-            Configurar Mensagens
-          </button>
-          <button
-            onClick={() => setIsBulkModalOpen(true)}
-            className="px-4 py-2 bg-blue-600 rounded-md text-white text-sm font-medium hover:bg-blue-700 cursor-pointer transition-colors"
-          >
-            Disparar em Massa
-          </button>
+        <button
+          onClick={handleAddClient}
+          className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg cursor-pointer"
+        >
+          <Plus size={20} />
+          Novo Cliente
+        </button>
+      </div>
+
+      {/* Search */}
+      <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+        <div className="relative">
+          <Search className="absolute left-3 top-3 text-slate-400" size={20} />
+          <input
+            type="text"
+            placeholder="Buscar por nome ou telefone..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none"
+          />
         </div>
       </div>
 
-      <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
-        <table className="w-full text-left">
-          <thead className="bg-blue-50 text-slate-500 text-xs uppercase font-semibold border-b border-slate-200">
+      {/* Clients Table */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <table className="w-full">
+          <thead className="bg-blue-50 text-slate-600 text-xs uppercase font-semibold">
             <tr>
-              <th className="px-6 py-3">Cliente</th>
-              <th className="px-6 py-3">Endereço</th>
-              <th className="px-6 py-3">Última Visita</th>
-              <th className="px-6 py-3">Status</th>
-              <th className="px-6 py-3 text-right">Ações</th>
+              <th className="px-6 py-4 text-left">Cliente</th>
+              <th className="px-6 py-4 text-left">Telefone</th>
+              <th className="px-6 py-4 text-left">Endereço</th>
+              <th className="px-6 py-4 text-center">Ações</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {clients.map((client) => (
-              <tr key={client.id} className="hover:bg-blue-50 transition-colors">
-                <td className="px-6 py-4">
-                  <div className="font-bold text-slate-900">{client.name}</div>
-                  <div className="text-xs text-slate-500">{client.phone}</div>
-                </td>
-                <td className="px-6 py-4 text-sm text-slate-700 max-w-xs truncate">
-                  {client.address || 'Endereço não informado'}
-                </td>
-                <td className="px-6 py-4 text-sm text-slate-700">
-                  <div className="flex items-center gap-2">
-                    <Clock size={14} className="text-slate-400" />
-                    {client.lastVisit}
-                  </div>
-                </td>
-                <td className="px-6 py-4">
-                  {client.npsScore ? (
-                    <span className={`font-bold ${client.npsScore >= 9 ? 'text-green-600' : 'text-yellow-600'}`}>
-                      NPS: {client.npsScore}
-                    </span>
-                  ) : <span className="text-slate-400 text-xs">Sem Avaliação</span>}
-                </td>
-                <td className="px-6 py-4 text-right">
-                  <div className="flex items-center justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleEditClient(client.id)}
-                      className="p-2 text-slate-600 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition-colors cursor-pointer bg-white shadow-sm border border-slate-200"
-                      title="Editar Cliente"
-                    >
-                      <Edit2 size={16} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteClient(client.id, client.name)}
-                      className="p-2 text-slate-600 hover:text-red-600 hover:bg-red-100 rounded-lg transition-colors cursor-pointer bg-white shadow-sm border border-slate-200"
-                      title="Excluir Cliente"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                    <button
-                      onClick={() => handleWhatsApp(client.phone, client.name)}
-                      className="inline-flex items-center justify-center gap-2 bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded text-sm font-medium transition-colors cursor-pointer shadow-sm"
-                    >
-                      <MessageCircle size={16} />
-                      WhatsApp
-                    </button>
-                  </div>
+            {filteredClients.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="px-6 py-12 text-center text-slate-500">
+                  <Users className="mx-auto mb-3 text-slate-300" size={48} />
+                  <p className="text-lg font-medium">Nenhum cliente encontrado</p>
                 </td>
               </tr>
-            ))}
+            ) : (
+              filteredClients.map((client) => (
+                <tr key={client.id} className="hover:bg-slate-50">
+                  <td className="px-6 py-4 font-semibold text-slate-800">{client.name}</td>
+                  <td className="px-6 py-4 text-slate-600">{client.phone}</td>
+                  <td className="px-6 py-4 text-sm text-slate-600">{client.address || '-'}</td>
+                  <td className="px-6 py-4">
+                    <div className="flex items-center justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleEditClient(client)}
+                        className="p-2 text-slate-600 hover:text-blue-600 hover:bg-blue-100 rounded-lg cursor-pointer"
+                        title="Editar"
+                      >
+                        <Edit2 size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteClient(client.id, client.name)}
+                        className="p-2 text-slate-600 hover:text-red-600 hover:bg-red-100 rounded-lg cursor-pointer"
+                        title="Excluir"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                      <button
+                        onClick={() => handleWhatsApp(client.phone, client.name)}
+                        className="inline-flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded text-sm cursor-pointer"
+                      >
+                        <MessageCircle size={16} />
+                        WhatsApp
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>
-
-      {/* MODAL 1: Register Client */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 relative animate-in fade-in zoom-in duration-200">
-            <button
-              onClick={handleCloseModal}
-              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors"
-            >
-              <X size={20} />
-            </button>
-            <h3 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2">
-              <div className="p-2 bg-teal-100 rounded-lg text-teal-600">
-                <User size={20} />
-              </div>
-              Novo Cliente
-            </h3>
-            <form onSubmit={handleRegisterSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Nome Completo</label>
-                <div className="relative">
-                  <User className="absolute left-3 top-3 text-slate-400" size={18} />
-                  <input
-                    type="text"
-                    required
-                    value={newClient.name}
-                    onChange={(e) => setNewClient({ ...newClient, name: e.target.value })}
-                    className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none text-slate-800 shadow-sm"
-                    placeholder="Ex: João da Silva"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Telefone / WhatsApp</label>
-                <div className="relative">
-                  <Phone className="absolute left-3 top-3 text-slate-400" size={18} />
-                  <input
-                    type="tel"
-                    required
-                    value={newClient.phone}
-                    onChange={(e) => setNewClient({ ...newClient, phone: e.target.value })}
-                    className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none text-slate-800 shadow-sm"
-                    placeholder="(00) 00000-0000"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Endereço Completo</label>
-                <div className="relative">
-                  <MapPin className="absolute left-3 top-3 text-slate-400" size={18} />
-                  <textarea
-                    rows={3}
-                    value={newClient.address}
-                    onChange={(e) => setNewClient({ ...newClient, address: e.target.value })}
-                    className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none text-slate-800 resize-none shadow-sm"
-                    placeholder="Rua, Número, Bairro, Cidade..."
-                  />
-                </div>
-              </div>
-              <div className="pt-2">
-                <button
-                  type="submit"
-                  className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 rounded-lg transition-colors shadow-md flex items-center justify-center gap-2"
-                >
-                  <CheckCircle size={18} />
-                  Cadastrar Cliente
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 2: Configure Messages */}
-      {isConfigModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 relative animate-in fade-in zoom-in duration-200">
-            <button
-              onClick={() => setIsConfigModalOpen(false)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors"
-            >
-              <X size={20} />
-            </button>
-            <h3 className="text-xl font-bold text-slate-800 mb-4 flex items-center gap-2">
-              <Settings size={20} /> Configuração de Mensagens
-            </h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">Mensagem Padrão de Recall</label>
-                <textarea className="w-full border border-slate-300 bg-white shadow-sm rounded-lg p-3 text-sm h-32 focus:ring-2 focus:ring-blue-500 outline-none" defaultValue="Olá [Nome], tudo bem? Já faz um tempo que você fez seus óculos na Léo Ótica. Que tal agendar uma revisão gratuita?"></textarea>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">Frequência de Envio</label>
-                <select className="w-full border border-slate-300 bg-white shadow-sm rounded-lg p-2 text-sm">
-                  <option>A cada 12 meses (Recomendado)</option>
-                  <option>A cada 6 meses</option>
-                  <option>A cada 18 meses</option>
-                </select>
-              </div>
-              <button onClick={() => { alert('Configurações salvas!'); setIsConfigModalOpen(false); }} className="w-full bg-blue-600 text-white py-2 rounded-lg font-bold">Salvar Configurações</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 3: Bulk Send */}
-      {isBulkModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 relative animate-in fade-in zoom-in duration-200">
-            <button
-              onClick={() => setIsBulkModalOpen(false)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors"
-            >
-              <X size={20} />
-            </button>
-            <h3 className="text-xl font-bold text-slate-800 mb-4 flex items-center gap-2">
-              <Send size={20} /> Disparo em Massa
-            </h3>
-            <p className="text-sm text-slate-600 mb-6">Você está prestes a enviar mensagens para <strong>{recallList.length} clientes</strong> que estão no período de recall. Deseja continuar?</p>
-
-            <div className="bg-yellow-50 border border-yellow-200 p-4 rounded-lg mb-6">
-              <p className="text-xs text-yellow-800 font-medium">⚠️ Nota: O WhatsApp Web será aberto para cada contato sequencialmente.</p>
-            </div>
-
-            <div className="flex gap-3">
-              <button onClick={() => setIsBulkModalOpen(false)} className="flex-1 border border-slate-300 text-slate-700 py-2 rounded-lg font-bold">Cancelar</button>
-              <button onClick={() => { alert('Disparando mensagens...'); setIsBulkModalOpen(false); }} className="flex-1 bg-green-600 text-white py-2 rounded-lg font-bold">Confirmar Envio</button>
-            </div>
-          </div>
-        </div>
-      )}
-
     </div>
   );
 };
